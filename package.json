@@ -1,0 +1,116 @@
+{
+  "name": "bg-skin",
+  "displayName": "bg-skin — 自定义编辑器背景",
+  "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
+  "version": "0.1.0",
+  "publisher": "bg-skin-dev",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "background",
+    "wallpaper",
+    "skin",
+    "背景",
+    "壁纸"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "bgSkin.menu",
+        "title": "背景设置菜单",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.selectImages",
+        "title": "选择背景图（可多选）",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.random",
+        "title": "随机切换背景图",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.opacity",
+        "title": "调整背景透明度",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.blur",
+        "title": "调整背景模糊",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.position",
+        "title": "调整背景位置/尺寸",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.toggle",
+        "title": "开启 / 关闭背景",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.restore",
+        "title": "恢复原状（还原核心文件）",
+        "category": "bg-skin"
+      }
+    ],
+    "configuration": {
+      "title": "bg-skin",
+      "properties": {
+        "bgSkin.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用背景。关闭会还原被修改的核心文件（需重载窗口）。"
+        },
+        "bgSkin.images": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "背景图片的绝对路径列表。当前显示第一张，可用「随机切换」轮换。"
+        },
+        "bgSkin.opacity": {
+          "type": "number",
+          "default": 0.18,
+          "minimum": 0.02,
+          "maximum": 1,
+          "description": "背景不透明度 0~1，越大越明显。建议 0.1~0.25 保证代码可读。"
+        },
+        "bgSkin.blur": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 50,
+          "description": "背景模糊半径（像素）。"
+        },
+        "bgSkin.position": {
+          "type": "string",
+          "enum": [
+            "cover",
+            "contain",
+            "center"
+          ],
+          "default": "cover",
+          "description": "cover：填满窗口（可裁切）；contain：完整显示（可留边）；center：原始尺寸居中。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/run-sandbox.js",
+    "inspect": "node scripts/inspect-vscode.js",
+    "vscode:uninstall": "node ./src/uninstall-hook.js"
+  }
+}

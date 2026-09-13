@@ -1,0 +1,4 @@
+test/.sandbox/
+assets/
+*.vsix
+node_modules/
