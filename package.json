@@ -5,6 +5,10 @@
   "version": "0.2.0",
   "publisher": "bg-skin-dev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sdh0219/bg-skin.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

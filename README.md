@@ -4,6 +4,11 @@
 
 > **English** | Pick your own local images as the VS Code editor background, with opacity / blur / position control. The extension patches VS Code's workbench files and keeps checksums consistent, restores originals on uninstall, and re-applies the patch automatically after VS Code upgrades.
 
+## 📥 安装
+
+- **普通用户（免构建）**：到 [Releases](https://github.com/sdh0219/bg-skin/releases) 下载 `.vsix` 安装包，保姆级图文教程见 **[INSTALL.md](INSTALL.md)**。
+- **开发者**：见下方"安装（开发阶段）"。
+
 ## 工作原理与安全设计
 
 VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安装目录的 workbench 样式文件注入一小段 CSS。为此它做了四件别人容易漏掉的工程事：
@@ -73,8 +78,8 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
 
 ```
 npm i -g @vscode/vsce
-vsce package          # 生成 bg-skin-0.1.0.vsix
-code --install-extension bg-skin-0.1.0.vsix
+vsce package          # 生成 bg-skin-0.2.0.vsix
+code --install-extension bg-skin-0.2.0.vsix
 ```
 
 调试：F5 启动 Extension Development Host（宿主与正式版共用同一份核心文件，补丁行为完全一致）。
