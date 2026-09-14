@@ -288,6 +288,101 @@ function run() {
     console.log('ok 10 - 图片缺失有警告 / 无目标文件时明确失败');
   }
 
+  // ---------- 11. 旧版校验和算法（sha1 世代）→ 自动探测并沿用 ----------
+  {
+    makeSandbox();
+    const sha1nopad = (b) => crypto.createHash('sha1').update(b).digest('base64').replace(/=+$/, '');
+    const product = JSON.parse(read(productPath));
+    product.checksums['vs/workbench/workbench.desktop.main.css'] = sha1nopad(read(CSS_PATH));
+    product.checksums['vs/code/electron-browser/workbench/workbench.html'] = sha1nopad(read(HTML_PATH));
+    fs.writeFileSync(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+
+    const r = patcher.applyPatch(APP_ROOT, CFG1, log);
+    assert.strictEqual(r.ok, true);
+    const sums = JSON.parse(read(productPath)).checksums;
+    // 关键：写入的必须是 sha1 算法的结果，而不是默认 sha256
+    assert.strictEqual(sums['vs/workbench/workbench.desktop.main.css'], sha1nopad(read(CSS_PATH)),
+      '应沿用探测到的 sha1-b64-nopad 算法');
+    assert.notStrictEqual(sums['vs/workbench/workbench.desktop.main.css'], checksumOf(read(CSS_PATH)),
+      '不应错误地使用 sha256');
+    patcher.restore(APP_ROOT, log);
+    console.log('ok 11 - 校验和算法自动探测（sha1 世代兼容）');
+  }
+
+  // ---------- 12. 无法识别的算法 → 跳过重写 + 用户可见警告，绝不写错 ----------
+  {
+    makeSandbox();
+    const product = JSON.parse(read(productPath));
+    for (const k of Object.keys(product.checksums)) product.checksums[k] = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    fs.writeFileSync(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+
+    const r = patcher.applyPatch(APP_ROOT, CFG1, log);
+    assert.strictEqual(r.ok, true, '打补丁本身仍应成功');
+    assert.ok(r.warnings.some((w) => w.includes('校验和')), `应产生校验和警告: ${r.warnings}`);
+    const sums = JSON.parse(read(productPath)).checksums;
+    for (const k of Object.keys(sums)) {
+      assert.strictEqual(sums[k], 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '不应猜格式乱写');
+    }
+    patcher.restore(APP_ROOT, log);
+    console.log('ok 12 - 未知算法时跳过重写并警告（绝无"损坏"风险）');
+  }
+
+  // ---------- 13. 核心文件改名 → 目录扫描兜底 ----------
+  {
+    makeSandbox();
+    const wbDir = path.dirname(CSS_PATH);
+    const renamed = path.join(wbDir, 'workbench.future-version.css');
+    fs.renameSync(CSS_PATH, renamed);
+
+    const targets = patcher.resolveTargets(APP_ROOT);
+    assert.ok(targets.css && targets.css.endsWith('workbench.future-version.css'),
+      `应扫描到改名后的主样式包: ${targets.css}`);
+
+    const r = patcher.applyPatch(APP_ROOT, CFG1, log);
+    assert.strictEqual(r.ok, true);
+    assert.ok(read(renamed).toString().includes(patcher.CSS_START), '补丁应注入到扫描到的文件');
+    patcher.restore(APP_ROOT, log);
+    console.log('ok 13 - 文件名漂移时目录扫描兜底');
+  }
+
+  // ---------- 14. overlay 覆盖层模式：不依赖内部类名 ----------
+  {
+    makeSandbox();
+    const cfgO = { ...CFG1, mode: 'overlay' };
+    const block = patcher.buildCssBlock(cfgO);
+    assert.ok(block.includes('z-index: 99998'), 'overlay 应置顶显示');
+    assert.ok(!block.includes('monaco'), 'overlay 不得依赖任何 monaco 内部类名');
+    assert.ok(!block.includes('background-color: transparent'), 'overlay 不应改动容器配色');
+    assert.notStrictEqual(
+      patcher.fingerprintOf(cfgO),
+      patcher.fingerprintOf(CFG1),
+      'mode 应参与指纹'
+    );
+    // 默认 behind 模式行为不变
+    assert.ok(patcher.buildCssBlock(CFG1).includes('z-index: -1'), 'behind 应保持在内容之下');
+    // 端到端：overlay 打补丁 + 还原
+    const r = patcher.applyPatch(APP_ROOT, cfgO, log);
+    assert.strictEqual(r.ok, true);
+    assert.ok(read(CSS_PATH).toString().includes('z-index: 99998'));
+    patcher.restore(APP_ROOT, log);
+    console.log('ok 14 - overlay 保底模式');
+  }
+
+  // ---------- 15. 安装位置持久化（卸载钩子的自定义路径保险） ----------
+  {
+    process.env.BG_SKIN_MARKER = path.join(__dirname, '.marker-test.json');
+    const persist = require('../src/persist');
+    assert.ok(persist.saveLastAppRoot('D:/custom/path/vscode/resources/app'));
+    assert.strictEqual(persist.readLastAppRoot(), 'D:/custom/path/vscode/resources/app');
+    assert.strictEqual(persist.readLastAppRoot(), 'D:/custom/path/vscode/resources/app');
+    assert.ok(persist.looksLikeAppRoot(APP_ROOT), '合法 appRoot 应被识别');
+    assert.ok(!persist.looksLikeAppRoot('D:/no/such/dir'), '非法路径应被拒绝');
+    assert.ok(!persist.looksLikeAppRoot(null));
+    fs.rmSync(process.env.BG_SKIN_MARKER, { force: true });
+    delete process.env.BG_SKIN_MARKER;
+    console.log('ok 15 - 安装位置持久化');
+  }
+
   // 清理
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   console.log('\n全部沙箱测试通过 ✔');

@@ -25,6 +25,7 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
 | `bg-skin: 调整背景透明度` | 0.02~1，越大越明显，建议 0.1~0.25 |
 | `bg-skin: 调整背景模糊` | 毛玻璃效果（px） |
 | `bg-skin: 调整背景位置/尺寸` | cover / contain / center |
+| `bg-skin: 切换背景模式（底层/覆盖层）` | 见下方"版本兼容策略" |
 | `bg-skin: 开启 / 关闭背景` | 关闭即还原核心文件 |
 | `bg-skin: 恢复原状` | 一键还原所有被修改的文件（卸载前建议先执行） |
 
@@ -36,11 +37,37 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
   "bgSkin.images": ["D:/图库/壁纸.png"],   // 多选后自动写入
   "bgSkin.opacity": 0.18,
   "bgSkin.blur": 0,
-  "bgSkin.position": "cover"
+  "bgSkin.position": "cover",
+  "bgSkin.mode": "behind"
 }
 ```
 
 改完设置需要**重载窗口**生效（扩展会弹提示按钮，一键重载）。
+
+## 版本兼容策略（"VS Code 升级后还有效吗？"）
+
+本扩展按纵深防御设计，任何一层失效都有下一层兜底：
+
+1. **升级自愈**：VS Code 升级覆盖核心文件后，注入标记丢失，扩展下次启动自动重新打补丁。
+2. **注入目标扫描**：优先认已知文件名（`workbench.desktop.main.css`），找不到就扫描目录取主样式包；老版本的 `workbench.html` 内联路径同样按优先级 + 目录扫描兜底。
+3. **校验和算法自动探测**：新版本是 sha256、老版本是 sha1 世代，扩展在备份时机（文件必为原版）反推本机算法并记入元数据；还原时即使存量校验和已是自己重写过的值也能正确回归原厂。完全识别不了时跳过重写并提示用 `lehni.vscode-fix-checksums` 修复，**绝不猜格式乱写**。
+4. **双模式保底**：
+   - `behind`（默认）：图在编辑器内容下方透出，效果最佳，依赖 VS Code 内部 CSS 类名；
+   - `overlay`：低透明度覆盖整窗的"水印"模式，**不依赖任何内部类名**——即使未来 VS Code 改了 DOM 结构导致 behind 看不到图，切到 overlay 依然有效。
+
+边界说明：如果 VS Code 大改到连 CSS 都无法注入（如核心文件位置彻底重构），需要扩展发新版本跟进——这是一切同类扩展的共同边界。但下一条保证没有例外：
+
+## "随时回到默认背景"的保证
+
+任何情况下你都不会被锁死在壁纸状态，共五条退路：
+
+1. 命令 `bg-skin: 开启 / 关闭背景`（或状态栏菜单里的"恢复原状"）；
+2. 设置 `bgSkin.enabled: false`，下次启动自动还原；
+3. 卸载扩展时 `vscode:uninstall` 钩子自动还原（含自定义安装路径，运行期已记录位置）；
+4. `deactivate` 兜底检测；
+5. **手动救援**（扩展彻底进不去时的终极手段）：所有备份与被改文件同目录、后缀 `.bg-skin-backup`，把备份复制/改名回原文件名即可回到原厂状态，再把 `product.json` 里对应键删掉或用 fix-checksums 修复。
+
+每次改动核心文件的备份绝对路径都会打印到输出面板（Output → bg-skin），出问题可按图索骥。
 
 ## 安装（开发阶段）
 
@@ -63,8 +90,8 @@ node scripts/apply-dev.js status|apply|restore   # CLI 直接操作（开发与�
 技术要点（新版本 VS Code 实测，1.119.1）：
 
 - 注入目标：`resources/app/out/vs/workbench/workbench.desktop.main.css`（尾部追加标记块）；CSP 放行需改 `out/vs/code/electron-browser/workbench/workbench.html` 的 `img-src` 增加 `file:`。
-- 校验和：`product.json → checksums`，键为相对 `out/` 的 POSIX 路径，值为 **sha256 的 base64（去尾部 `=`）**。
-- 背景层：`body::after`（`position: fixed; z-index: -1`），编辑器/侧栏/面板等容器置透明；标签页、标题栏、弹窗保留原配色保证可读性。
+- 校验和：`product.json → checksums`，键为相对 `out/` 的 POSIX 路径；算法按版本自动探测（1.119 实测 sha256-base64-去尾`=`，旧版为 sha1 世代）。
+- 背景层：`body::after`（behind 模式 `z-index: -1` 在内容之下并透明化容器；overlay 模式 `z-index: 99998` 置顶水印），标签页、标题栏、弹窗在 behind 模式下保留原配色保证可读性。
 
 ## Roadmap
 

@@ -11,7 +11,15 @@ const { discoverAppRoots } = require('./discover');
 
 const PREFIX = '[bg-skin:uninstall]';
 
-for (const appRoot of discoverAppRoots()) {
+// 磁盘扫描 + 运行期记录的自定义安装位置（扩展运行时写入 ~/.bg-skin.json）
+const candidates = [...discoverAppRoots()];
+const persisted = require('./persist').readLastAppRoot();
+if (persisted && !candidates.includes(persisted)) {
+  console.log(`${PREFIX} 发现运行期记录的安装位置: ${persisted}`);
+  candidates.push(persisted);
+}
+
+for (const appRoot of candidates) {
   try {
     const state = patcher.readState(appRoot);
     if (!state.patched && state.backups.length === 0) continue;

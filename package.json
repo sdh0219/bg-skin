@@ -2,7 +2,7 @@
   "name": "bg-skin",
   "displayName": "bg-skin — 自定义编辑器背景",
   "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "bg-skin-dev",
   "license": "MIT",
   "engines": {
@@ -55,6 +55,11 @@
         "category": "bg-skin"
       },
       {
+        "command": "bgSkin.mode",
+        "title": "切换背景模式（底层/覆盖层）",
+        "category": "bg-skin"
+      },
+      {
         "command": "bgSkin.toggle",
         "title": "开启 / 关闭背景",
         "category": "bg-skin"
@@ -104,6 +109,15 @@
           ],
           "default": "cover",
           "description": "cover：填满窗口（可裁切）；contain：完整显示（可留边）；center：原始尺寸居中。"
+        },
+        "bgSkin.mode": {
+          "type": "string",
+          "enum": [
+            "behind",
+            "overlay"
+          ],
+          "default": "behind",
+          "description": "behind：图在编辑器内容下方透出（效果最佳，依赖 VS Code 内部结构）；overlay：低透明度覆盖整窗（不依赖内部结构，升级后若 behind 看不到图请切换到此模式）。"
         }
       }
     }

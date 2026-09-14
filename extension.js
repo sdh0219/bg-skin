@@ -2,6 +2,7 @@
 
 const vscode = require('vscode');
 const patcher = require('./src/patcher');
+const persist = require('./src/persist');
 
 let outputChannel = null;
 let extensionId = null;
@@ -18,6 +19,7 @@ function getConfig() {
     opacity: c.get('opacity', 0.18),
     blur: c.get('blur', 0),
     position: c.get('position', 'cover'),
+    mode: c.get('mode', 'behind'),
   };
 }
 
@@ -34,7 +36,13 @@ function syncPatch() {
   if (cfg.enabled && cfg.images.length > 0) {
     return patcher.applyPatch(
       appRoot,
-      { imagePath: cfg.images[0], opacity: cfg.opacity, position: cfg.position, blur: cfg.blur },
+      {
+        imagePath: cfg.images[0],
+        opacity: cfg.opacity,
+        position: cfg.position,
+        blur: cfg.blur,
+        mode: cfg.mode,
+      },
       log
     );
   }
@@ -79,6 +87,8 @@ function applyFlow(what) {
     );
     return;
   }
+  // 记住本次成功操作过的 appRoot，供卸载钩子还原自定义安装路径
+  persist.saveLastAppRoot(vscode.env.appRoot);
   if (result.warnings && result.warnings.length) {
     showOutputButton(result.warnings[0], 'warning');
   }
@@ -185,6 +195,21 @@ async function cmdPosition() {
   applyFlow('背景位置已更新');
 }
 
+const MODE_ITEMS = [
+  { label: 'behind（底层：图在编辑器内容下方透出，效果最佳）', value: 'behind' },
+  { label: 'overlay（覆盖层：整窗低透明度水印，兼容性最强）', value: 'overlay' },
+];
+
+async function cmdMode() {
+  const pick = await vscode.window.showQuickPick(MODE_ITEMS, {
+    title: 'bg-skin：背景模式（若升级后底层模式看不到图，请切到 overlay）',
+    placeHolder: '当前：' + getConfig().mode,
+  });
+  if (!pick) return;
+  await updateSetting('mode', pick.value);
+  applyFlow('背景模式已更新');
+}
+
 async function cmdToggle() {
   const cfg = getConfig();
   const next = !cfg.enabled;
@@ -216,6 +241,7 @@ function cmdMenu() {
     { label: '$(dash) 调整透明度', cmd: 'bgSkin.opacity' },
     { label: '$(eye-dimmed) 调整模糊', cmd: 'bgSkin.blur' },
     { label: '$(screen-full) 调整位置/尺寸', cmd: 'bgSkin.position' },
+    { label: '$(layers) 切换背景模式（底层/覆盖层）', cmd: 'bgSkin.mode' },
     { label: '$(circle-slash) 开启 / 关闭背景', cmd: 'bgSkin.toggle' },
     { label: '$(discard) 恢复原状（还原核心文件）', cmd: 'bgSkin.restore' },
   ];
@@ -241,6 +267,7 @@ async function activate(context) {
     ['bgSkin.opacity', cmdOpacity],
     ['bgSkin.blur', cmdBlur],
     ['bgSkin.position', cmdPosition],
+    ['bgSkin.mode', cmdMode],
     ['bgSkin.toggle', cmdToggle],
     ['bgSkin.restore', cmdRestore],
   ];
@@ -275,6 +302,7 @@ async function activate(context) {
       opacity: cfg.opacity,
       position: cfg.position,
       blur: cfg.blur,
+      mode: cfg.mode,
     });
     log(
       `state: patched=${state.patched} fingerprint=${state.fingerprint} | want=${want} fingerprint=${fp}`

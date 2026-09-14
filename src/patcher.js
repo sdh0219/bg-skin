@@ -81,19 +81,62 @@ function readVscodeVersion(appRoot) {
 /**
  * 返回 { css, html, styleFile }；均可能为 null。
  * styleFile：样式块应注入的文件（新版是 css，老版本没有 css 时回退 html）。
+ *
+ * 版本兼容策略：优先认已知文件名；找不到就在目录里扫描兜底——
+ *  - css：out/vs/workbench/ 下名为 workbench*.css 的文件中取最大者（主样式包）
+ *  - html：out/vs/code/<any>/workbench/workbench.html（先试 electron-sandbox / electron-browser）
  */
 function resolveTargets(appRoot) {
-  const css = path.join(appRoot, 'out', 'vs', 'workbench', 'workbench.desktop.main.css');
-  const htmlCandidates = [
-    path.join(appRoot, 'out', 'vs', 'code', 'electron-sandbox', 'workbench', 'workbench.html'),
-    path.join(appRoot, 'out', 'vs', 'code', 'electron-browser', 'workbench', 'workbench.html'),
-  ];
-  const html = htmlCandidates.find((p) => fs.existsSync(p)) || null;
-  const cssExists = fs.existsSync(css);
+  const wbDir = path.join(appRoot, 'out', 'vs', 'workbench');
+
+  let css = null;
+  const exactCss = path.join(wbDir, 'workbench.desktop.main.css');
+  if (fs.existsSync(exactCss)) {
+    css = exactCss;
+  } else if (fs.existsSync(wbDir)) {
+    let best = null;
+    let bestSize = -1;
+    for (const f of fs.readdirSync(wbDir)) {
+      if (!/^workbench[\w.-]*\.css$/i.test(f)) continue;
+      const fp = path.join(wbDir, f);
+      let size = 0;
+      try {
+        size = fs.statSync(fp).size;
+      } catch (_) {
+        continue;
+      }
+      if (size > bestSize) {
+        bestSize = size;
+        best = fp;
+      }
+    }
+    css = best;
+  }
+
+  const codeDir = path.join(appRoot, 'out', 'vs', 'code');
+  let html = null;
+  for (const backend of ['electron-sandbox', 'electron-browser']) {
+    const p = path.join(codeDir, backend, 'workbench', 'workbench.html');
+    if (fs.existsSync(p)) {
+      html = p;
+      break;
+    }
+  }
+  if (!html && fs.existsSync(codeDir)) {
+    for (const e of fs.readdirSync(codeDir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const p = path.join(codeDir, e.name, 'workbench', 'workbench.html');
+      if (fs.existsSync(p)) {
+        html = p;
+        break;
+      }
+    }
+  }
+
   return {
-    css: cssExists ? css : null,
+    css,
     html,
-    styleFile: cssExists ? css : html,
+    styleFile: css || html,
   };
 }
 
@@ -101,7 +144,13 @@ function resolveTargets(appRoot) {
 
 /** 配置指纹：写入补丁块注释，用于启动时判断"设置是否变了、要不要重打"。 */
 function fingerprintOf(cfg) {
-  const basis = JSON.stringify({ i: cfg.imagePath, o: cfg.opacity, p: cfg.position, b: cfg.blur });
+  const basis = JSON.stringify({
+    i: cfg.imagePath,
+    o: cfg.opacity,
+    p: cfg.position,
+    b: cfg.blur,
+    m: cfg.mode,
+  });
   return crypto.createHash('sha1').update(basis).digest('hex').slice(0, 8);
 }
 
@@ -135,14 +184,16 @@ function buildInnerCss(cfg) {
   const { size, position } = resolveSizePosition(cfg.position);
   const opacity = Math.min(1, Math.max(0.02, Number(cfg.opacity) || 0.18));
   const blur = Math.max(0, Number(cfg.blur) || 0);
-  return [
-    'html, body { background-color: transparent !important; background-image: none !important; }',
+  // overlay（覆盖层）：图以低透明度盖在整窗之上，不碰任何内部类名——
+  // VS Code 改 DOM 结构时它依然有效，是 behind 模式失效时的保底。
+  const overlay = cfg.mode === 'overlay';
+  const base = [
     'body::after {',
     '  content: "";',
     '  position: fixed;',
     '  top: 0; right: 0; bottom: 0; left: 0;',
-    '  z-index: -1;',
     '  pointer-events: none;',
+    `  z-index: ${overlay ? '99998' : '-1'};`,
     `  background-image: url("${pathToFileUrl(cfg.imagePath)}");`,
     '  background-repeat: no-repeat;',
     `  background-position: ${position};`,
@@ -150,6 +201,11 @@ function buildInnerCss(cfg) {
     `  opacity: ${opacity.toFixed(3)};`,
     `  filter: blur(${blur}px);`,
     '}',
+  ];
+  if (overlay) return base.join('\n');
+  return [
+    'html, body { background-color: transparent !important; background-image: none !important; }',
+    ...base,
     '.monaco-workbench { background-color: transparent !important; }',
     `${TRANSPARENT_SELECTORS.join(',\n')} { background-color: transparent !important; }`,
   ].join('\n');
@@ -231,19 +287,28 @@ function stripBlocks(content) {
 
 // ---------------------------------------------------------------- 备份
 
-function writeMeta(metaFile, buf, version, verb) {
+function writeMeta(metaFile, buf, version, verb, algoName) {
   fs.writeFileSync(
     metaFile,
     JSON.stringify(
-      { vscodeVersion: version, sha256: sha256hex(buf), [`${verb}At`]: new Date().toISOString() },
+      {
+        vscodeVersion: version,
+        sha256: sha256hex(buf),
+        checksumAlgo: algoName ?? null,
+        [`${verb}At`]: new Date().toISOString(),
+      },
       null,
       2
     )
   );
 }
 
-/** 确保备份与当前（未打补丁的）文件一致；内容不一致时刷新备份。返回备份路径。 */
-function ensureBackup(file, version, log) {
+/**
+ * 确保备份与当前（未打补丁的）文件一致；内容不一致时刷新备份。返回备份路径。
+ * 备份时机文件必然是原版——此时探测校验和算法最可靠，结果记入元数据，
+ * 供日后"存量校验和已是我们的重写值、内容反推失效"的还原流程使用。
+ */
+function ensureBackup(file, version, log, appRoot) {
   const backup = file + BACKUP_SUFFIX;
   const metaFile = file + META_SUFFIX;
   const cur = fs.readFileSync(file);
@@ -251,12 +316,12 @@ function ensureBackup(file, version, log) {
     const prev = fs.readFileSync(backup);
     if (!prev.equals(cur)) {
       fs.writeFileSync(backup, cur);
-      writeMeta(metaFile, cur, version, 'refreshed');
+      writeMeta(metaFile, cur, version, 'refreshed', detectChecksumAlgo(appRoot)?.name ?? null);
       log(`备份已刷新（原文件内容变化，通常是 VS Code 升级）: ${backup}`);
     }
   } else {
     fs.writeFileSync(backup, cur);
-    writeMeta(metaFile, cur, version, 'created');
+    writeMeta(metaFile, cur, version, 'created', detectChecksumAlgo(appRoot)?.name ?? null);
     log(`备份已创建: ${backup}`);
   }
   return backup;
@@ -264,9 +329,77 @@ function ensureBackup(file, version, log) {
 
 // ---------------------------------------------------------------- 校验和
 
-/** 与 VS Code 1.119 实测一致：sha256 + base64 去掉尾部 =。 */
-function computeChecksum(buf) {
-  return crypto.createHash('sha256').update(buf).digest('base64').replace(/=+$/, '');
+// 各世代 VS Code 的校验和算法（1.119 实测 sha256；更老版本为 sha1 世代，格式见社区修复工具）。
+// 顺序即优先级：新世代在前。
+const CHECKSUM_ALGOS = [
+  {
+    name: 'sha256-b64-nopad',
+    compute: (b) => crypto.createHash('sha256').update(b).digest('base64').replace(/=+$/, ''),
+  },
+  {
+    name: 'sha1-b64-nopad',
+    compute: (b) => crypto.createHash('sha1').update(b).digest('base64').replace(/=+$/, ''),
+  },
+  {
+    name: 'sha1-b64',
+    compute: (b) => crypto.createHash('sha1').update(b).digest('base64'),
+  },
+];
+
+function computeChecksum(buf, algo) {
+  return (algo || CHECKSUM_ALGOS[0]).compute(buf);
+}
+
+/**
+ * 反推本机 VS Code 使用的校验和算法：拿 product.json 里的存量值，
+ * 对"未修改的文件"（当前原样文件或备份=打补丁前的原版）逐算法比对。
+ * 探测不到返回 null，调用方必须跳过重写并提示——绝不猜格式。
+ */
+function detectChecksumAlgo(appRoot, log) {
+  let product;
+  try {
+    product = JSON.parse(fs.readFileSync(path.join(appRoot, 'product.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+  const sums = product.checksums || {};
+  const outDir = path.join(appRoot, 'out');
+  // 每个 entry 可能对应两个探针：当前文件（未打补丁时=原版）与备份（=打补丁前的原版）。
+  const probes = [];
+  for (const [key, stored] of Object.entries(sums)) {
+    const fp = path.join(outDir, key);
+    if (fs.existsSync(fp)) probes.push({ read: () => fs.readFileSync(fp), stored });
+    const backup = fp + BACKUP_SUFFIX;
+    if (fs.existsSync(backup)) probes.push({ read: () => fs.readFileSync(backup), stored });
+  }
+  for (const algo of CHECKSUM_ALGOS) {
+    for (const p of probes) {
+      let buf;
+      try {
+        buf = p.read();
+      } catch (_) {
+        continue;
+      }
+      if (algo.compute(buf) === p.stored) return algo;
+    }
+  }
+  return null;
+}
+
+/**
+ * 内容反推失败时的兜底：读备份元数据里记录的算法名（备份时机=文件必然原版，最可靠）。
+ */
+function algoFromMeta(files) {
+  for (const file of files) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(file + META_SUFFIX, 'utf8'));
+      const algo = CHECKSUM_ALGOS.find((a) => a.name === meta.checksumAlgo);
+      if (algo) return algo;
+    } catch (_) {
+      continue;
+    }
+  }
+  return null;
 }
 
 /** 只更新 product.json checksums 里已存在的键；不存在说明 VS Code 不校验该文件。 */
@@ -287,6 +420,11 @@ function updateChecksums(appRoot, files, log) {
     log('product.json 无 checksums 字段，跳过校验和更新');
     return false;
   }
+  const algo = detectChecksumAlgo(appRoot, log) || algoFromMeta(files);
+  if (!algo) {
+    log('无法识别本机 VS Code 的校验和算法，跳过重写。若出现"安装似乎已损坏"提示，安装 lehni.vscode-fix-checksums 即可修复');
+    return 'skipped';
+  }
   const outDir = path.join(appRoot, 'out');
   let changed = false;
   for (const file of files) {
@@ -296,11 +434,11 @@ function updateChecksums(appRoot, files, log) {
       log(`checksums 中无 ${rel}（该文件不受校验），跳过`);
       continue;
     }
-    const next = computeChecksum(fs.readFileSync(file));
+    const next = computeChecksum(fs.readFileSync(file), algo);
     if (product.checksums[rel] !== next) {
       product.checksums[rel] = next;
       changed = true;
-      log(`校验和已更新: ${rel}`);
+      log(`校验和已更新 (${algo.name}): ${rel}`);
     }
   }
   if (changed) atomicWrite(productPath, `${JSON.stringify(product, null, '\t')}\n`);
@@ -309,9 +447,9 @@ function updateChecksums(appRoot, files, log) {
 
 // ---------------------------------------------------------------- 主流程
 
-function patchFile(file, block, version, log) {
+function patchFile(file, block, version, log, appRoot) {
   const original = fs.readFileSync(file, 'utf8');
-  if (!isPatched(original)) ensureBackup(file, version, log);
+  if (!isPatched(original)) ensureBackup(file, version, log, appRoot);
   const isHtml = file.toLowerCase().endsWith('.html');
   const updated = isHtml ? spliceHtmlBlock(original, block) : spliceCssBlock(original, block);
   if (updated !== original) {
@@ -344,13 +482,13 @@ function applyPatch(appRoot, cfg, log) {
   // 1) 样式块：新版注入 css，老版本回退 html
   const styleFile = targets.styleFile;
   const block = styleFile === targets.css ? buildCssBlock(cfg) : buildHtmlBlock(cfg);
-  if (patchFile(styleFile, block, version, log).changed) changed.push(styleFile);
+  if (patchFile(styleFile, block, version, log, appRoot).changed) changed.push(styleFile);
   touched.push(styleFile);
 
   // 2) CSP：给 workbench.html 的 img-src 放行 file:
   if (targets.html) {
     const html = fs.readFileSync(targets.html, 'utf8');
-    if (!isPatched(html)) ensureBackup(targets.html, version, log);
+    if (!isPatched(html)) ensureBackup(targets.html, version, log, appRoot);
     const res = patchCspContent(html);
     if (res.changed) {
       atomicWrite(targets.html, res.content);
@@ -363,8 +501,13 @@ function applyPatch(appRoot, cfg, log) {
     warnings.push('未找到 workbench.html，未能放宽 CSP；若背景图不显示多半是这个原因');
   }
 
-  // 3) 校验和
-  updateChecksums(appRoot, touched, log);
+  // 3) 校验和（识别不了算法则跳过并警告，绝不写错格式）
+  const csStatus = updateChecksums(appRoot, touched, log);
+  if (csStatus === 'skipped') {
+    warnings.push(
+      '无法识别校验和算法，未重写 product.json；若 VS Code 提示"安装似乎已损坏"，安装 lehni.vscode-fix-checksums 即可修复'
+    );
+  }
 
   return { ok: true, changed, backups: touched.map((f) => f + BACKUP_SUFFIX), warnings };
 }
@@ -457,6 +600,8 @@ module.exports = {
   readState,
   fingerprintOf,
   computeChecksum,
+  detectChecksumAlgo,
+  CHECKSUM_ALGOS,
   // 内部（测试用）
   buildCssBlock,
   buildHtmlBlock,
