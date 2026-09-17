@@ -136,6 +136,45 @@ async function syncPresetByTheme(quiet) {
   return true;
 }
 
+/** 时段：早 / 午 / 晚 / 夜 */
+function hourBucket(hour) {
+  if (hour >= 6 && hour < 11) return 'morning';
+  if (hour >= 11 && hour < 17) return 'day';
+  if (hour >= 17 && hour < 21) return 'evening';
+  return 'night';
+}
+
+const BUCKET_LABEL = {
+  morning: '早晨',
+  day: '白天',
+  evening: '傍晚',
+  night: '深夜',
+};
+
+/**
+ * 按当前时段套预设。quiet=true 时仅在图不一致时写入。
+ * 若同时开了主题联动，时段优先（用户显式选了按点换肤）。
+ */
+async function syncPresetByTime(quiet) {
+  const cfg = getConfig();
+  if (!cfg.enabled || !cfg.autoPresetByTime) return false;
+  const bucket = hourBucket(new Date().getHours());
+  const presetId = String((cfg.timePresets && cfg.timePresets[bucket]) || 'starry');
+  const p = findPreset(presetId);
+  if (!p) return false;
+  const img = presetImagePath(p.file);
+  const already = cfg.images[0] && path.resolve(cfg.images[0]) === path.resolve(img);
+  if (quiet && already) {
+    log(`时段预设已是 ${p.id}，跳过`);
+    return false;
+  }
+  const ok = await writePresetSettings(p);
+  if (!ok) return false;
+  log(`时段联动 → ${p.name}（${BUCKET_LABEL[bucket]}）`);
+  applyFlow(`已按时段套用「${p.name}」`);
+  return true;
+}
+
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
 }
@@ -203,6 +242,13 @@ function getConfig() {
     autoPresetByTheme: !!c.get('autoPresetByTheme', false),
     lightPreset: String(c.get('lightPreset', 'sakura') || 'sakura'),
     darkPreset: String(c.get('darkPreset', 'starry') || 'starry'),
+    autoPresetByTime: !!c.get('autoPresetByTime', false),
+    timePresets: c.get('timePresets', {
+      morning: 'forest',
+      day: 'sakura',
+      evening: 'room',
+      night: 'starry',
+    }),
     blur: c.get('blur', 0),
     position: c.get('position', 'cover'),
     mode: c.get('mode', 'behind'),
@@ -350,6 +396,25 @@ async function cmdToggleThemePreset() {
     );
   } else {
     vscode.window.showInformationMessage('bg-skin：已关闭主题联动。');
+  }
+}
+
+/** 开关「按时段自动换预设」。 */
+async function cmdToggleTimePreset() {
+  const cfg = getConfig();
+  const next = !cfg.autoPresetByTime;
+  await updateSetting('autoPresetByTime', next);
+  log(next ? '已开启时段联动' : '已关闭时段联动');
+  if (next) {
+    await syncPresetByTime(false);
+    const bucket = hourBucket(new Date().getHours());
+    const tp = getConfig().timePresets || {};
+    vscode.window.showInformationMessage(
+      `bg-skin：已开启时段联动。当前「${BUCKET_LABEL[bucket]}」→ ${tp[bucket] || 'starry'}。` +
+        `早晨 forest / 白天 sakura / 傍晚 room / 深夜 starry（可在设置 timePresets 修改）。`
+    );
+  } else {
+    vscode.window.showInformationMessage('bg-skin：已关闭时段联动。');
   }
 }
 
@@ -532,6 +597,7 @@ function cmdMenu() {
     { label: '$(sparkle) 预设皮肤（二次元）', cmd: 'bgSkin.applyPreset' },
     { label: '$(dice) 随机换一套预设', cmd: 'bgSkin.randomPreset' },
     { label: '$(color-mode) 按亮/暗主题自动换肤', cmd: 'bgSkin.toggleThemePreset' },
+    { label: '$(watch) 按时段自动换肤（早/午/晚/夜）', cmd: 'bgSkin.toggleTimePreset' },
     { label: '$(folder-opened) 选择图库文件夹（随机轮换）', cmd: 'bgSkin.selectFolder' },
     { label: '$(device-camera) 选择背景图（可多选）', cmd: 'bgSkin.selectImages' },
     { label: '$(sync) 随机切换已选图片', cmd: 'bgSkin.random' },
@@ -563,6 +629,7 @@ async function activate(context) {
     ['bgSkin.applyPreset', cmdApplyPreset],
     ['bgSkin.randomPreset', cmdRandomPreset],
     ['bgSkin.toggleThemePreset', cmdToggleThemePreset],
+    ['bgSkin.toggleTimePreset', cmdToggleTimePreset],
     ['bgSkin.selectFolder', cmdSelectFolder],
     ['bgSkin.selectImages', cmdSelectImages],
     ['bgSkin.random', cmdRandom],
@@ -593,6 +660,14 @@ async function activate(context) {
     })
   );
 
+  // 时段联动：每 5 分钟检查一次（跨 6/11/17/21 点时自动换）
+  const timeTimer = setInterval(() => {
+    syncPresetByTime(true).catch((err) => {
+      log(`时段联动失败: ${err && err.stack}`);
+    });
+  }, 5 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(timeTimer) });
+
   // 启动同步：
   //  - VS Code 升级覆盖了补丁（标记丢失）→ 自动重新注入
   //  - 设置被手动改过（指纹不一致）→ 重新注入
@@ -607,13 +682,15 @@ async function activate(context) {
     }
     const state = patcher.readState(vscode.env.appRoot);
     const cfg = getConfig();
-    // 主题联动：启动时若已开启，先按当前亮/暗主题对齐预设（仅在不一致时改）
-    if (cfg.enabled && cfg.autoPresetByTheme) {
+    // 自动换肤优先级：时段 > 主题（两者都开时段优先）
+    if (cfg.enabled && cfg.autoPresetByTime) {
+      await syncPresetByTime(true);
+    } else if (cfg.enabled && cfg.autoPresetByTheme) {
       await syncPresetByTheme(true);
     }
     // 图库启动轮换：每次都从文件夹随机抽一张
     const cfg0 = getConfig();
-    if (cfg0.enabled && cfg0.imageFolder && cfg0.rotateOnStartup) {
+    if (cfg0.enabled && cfg0.imageFolder && cfg0.rotateOnStartup && !cfg0.autoPresetByTime) {
       const pool = listImagesInFolder(cfg0.imageFolder);
       if (pool.length > 0) {
         const pick = pool[Math.floor(Math.random() * pool.length)];

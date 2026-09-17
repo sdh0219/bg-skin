@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (2026-09-15)
+
+按时段自动换肤：
+
+- 新增 `bgSkin.autoPresetByTime` + `bgSkin.timePresets`（早晨/白天/傍晚/深夜）
+- 默认：早晨 forest、白天 sakura、傍晚 room、深夜 starry
+- 新增命令 `bgSkin.toggleTimePreset`；每 5 分钟检查一次时段边界
+- 自动换肤优先级：时段联动 > 主题联动；时段开启时启动轮换不覆盖预设
+
 ## 0.4.0 (2026-09-15)
 
 主题联动与随机预设：

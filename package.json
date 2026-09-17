@@ -2,7 +2,7 @@
   "name": "bg-skin",
   "displayName": "bg-skin — 自定义编辑器背景",
   "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "bg-skin-dev",
   "license": "MIT",
   "repository": {
@@ -46,6 +46,11 @@
       {
         "command": "bgSkin.toggleThemePreset",
         "title": "按亮/暗主题自动换肤",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.toggleTimePreset",
+        "title": "按时段自动换肤（早/午/晚/夜）",
         "category": "bg-skin"
       },
       {
@@ -150,6 +155,43 @@
           "default": "starry",
           "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
           "description": "暗色主题时使用的内置预设 id。"
+        },
+        "bgSkin.autoPresetByTime": {
+          "type": "boolean",
+          "default": false,
+          "description": "按时段自动切换预设（每 5 分钟检查）。开启后优先于主题联动。"
+        },
+        "bgSkin.timePresets": {
+          "type": "object",
+          "default": {
+            "morning": "forest",
+            "day": "sakura",
+            "evening": "room",
+            "night": "starry"
+          },
+          "properties": {
+            "morning": {
+              "type": "string",
+              "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+              "description": "早晨 6:00–11:00"
+            },
+            "day": {
+              "type": "string",
+              "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+              "description": "白天 11:00–17:00"
+            },
+            "evening": {
+              "type": "string",
+              "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+              "description": "傍晚 17:00–21:00"
+            },
+            "night": {
+              "type": "string",
+              "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+              "description": "深夜 21:00–次日 6:00"
+            }
+          },
+          "description": "四个时段分别用哪套内置预设。"
         },
         "bgSkin.blur": {
           "type": "number",
