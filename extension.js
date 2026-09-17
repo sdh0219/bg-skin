@@ -81,6 +81,61 @@ function presetImagePath(file) {
   return path.join(base, 'presets', 'images', file);
 }
 
+function findPreset(id) {
+  return PRESETS.find((p) => p.id === id) || null;
+}
+
+/** 当前 VS Code 是否亮色主题。 */
+function isLightTheme() {
+  try {
+    const k = vscode.window.activeColorTheme.kind;
+    return (
+      k === vscode.ColorThemeKind.Light ||
+      k === vscode.ColorThemeKind.HighContrastLight
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+/** 把预设写入设置（不立刻 applyFlow，由调用方决定是否重载）。 */
+async function writePresetSettings(p) {
+  const img = presetImagePath(p.file);
+  if (!fs.existsSync(img)) {
+    log(`预设图片缺失: ${img}`);
+    return false;
+  }
+  await updateSetting('images', [img]);
+  await updateSetting('opacity', p.opacity);
+  await updateSetting('blur', p.blur);
+  await updateSetting('position', p.position);
+  await updateSetting('mode', p.mode);
+  return true;
+}
+
+/**
+ * 按当前亮/暗主题自动套预设。
+ * quiet=true 时仅在「当前图与目标不一致」时写入并 apply。
+ */
+async function syncPresetByTheme(quiet) {
+  const cfg = getConfig();
+  if (!cfg.enabled || !cfg.autoPresetByTheme) return false;
+  const presetId = isLightTheme() ? cfg.lightPreset : cfg.darkPreset;
+  const p = findPreset(presetId);
+  if (!p) return false;
+  const img = presetImagePath(p.file);
+  const already = cfg.images[0] && path.resolve(cfg.images[0]) === path.resolve(img);
+  if (quiet && already) {
+    log(`主题预设已是 ${p.id}，跳过`);
+    return false;
+  }
+  const ok = await writePresetSettings(p);
+  if (!ok) return false;
+  log(`主题联动 → ${p.name}（${isLightTheme() ? '亮色' : '暗色'}主题）`);
+  applyFlow(`已按主题套用「${p.name}」`);
+  return true;
+}
+
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
 }
@@ -145,6 +200,9 @@ function getConfig() {
     rotateOnStartup: !!c.get('rotateOnStartup', false),
     opacity: c.get('opacity', 0.18),
     overlayOpacity: c.get('overlayOpacity', 0.08),
+    autoPresetByTheme: !!c.get('autoPresetByTheme', false),
+    lightPreset: String(c.get('lightPreset', 'sakura') || 'sakura'),
+    darkPreset: String(c.get('darkPreset', 'starry') || 'starry'),
     blur: c.get('blur', 0),
     position: c.get('position', 'cover'),
     mode: c.get('mode', 'behind'),
@@ -236,7 +294,7 @@ function applyFlow(what) {
 
 async function cmdApplyPreset() {
   const items = PRESETS.map((p) => ({
-    label: `$(paintcan) ${p.name}`,
+    label: `$(sparkle) ${p.name}`,
     description: `${p.opacity} · ${p.blur ? `blur ${p.blur}` : '清晰'}`,
     detail: p.desc,
     preset: p,
@@ -261,6 +319,38 @@ async function cmdApplyPreset() {
   await updateSetting('mode', p.mode);
   log(`应用预设 ${p.id}: ${img}`);
   applyFlow(`已应用预设「${p.name}」`);
+}
+
+/** 从内置预设里随机换一套（二次元浓度拉满）。 */
+async function cmdRandomPreset() {
+  const cfg = getConfig();
+  const current = cfg.images[0] ? path.basename(cfg.images[0]) : '';
+  const pool = PRESETS.filter((p) => p.file !== current);
+  const list = pool.length ? pool : PRESETS;
+  const p = list[Math.floor(Math.random() * list.length)];
+  const ok = await writePresetSettings(p);
+  if (!ok) {
+    showOutputButton(`预设图片缺失：${p.file}`, 'error');
+    return;
+  }
+  log(`随机预设: ${p.id}`);
+  applyFlow(`随机换上「${p.name}」`);
+}
+
+/** 开关「按亮/暗主题自动换预设」。 */
+async function cmdToggleThemePreset() {
+  const cfg = getConfig();
+  const next = !cfg.autoPresetByTheme;
+  await updateSetting('autoPresetByTheme', next);
+  log(next ? '已开启主题联动' : '已关闭主题联动');
+  if (next) {
+    await syncPresetByTheme(false);
+    vscode.window.showInformationMessage(
+      `bg-skin：已开启主题联动（亮→${cfg.lightPreset}，暗→${cfg.darkPreset}）。切主题后自动换肤。`
+    );
+  } else {
+    vscode.window.showInformationMessage('bg-skin：已关闭主题联动。');
+  }
 }
 
 async function cmdSelectFolder() {
@@ -440,9 +530,11 @@ async function cmdRestore() {
 function cmdMenu() {
   const items = [
     { label: '$(sparkle) 预设皮肤（二次元）', cmd: 'bgSkin.applyPreset' },
+    { label: '$(dice) 随机换一套预设', cmd: 'bgSkin.randomPreset' },
+    { label: '$(color-mode) 按亮/暗主题自动换肤', cmd: 'bgSkin.toggleThemePreset' },
     { label: '$(folder-opened) 选择图库文件夹（随机轮换）', cmd: 'bgSkin.selectFolder' },
     { label: '$(device-camera) 选择背景图（可多选）', cmd: 'bgSkin.selectImages' },
-    { label: '$(dice) 随机切换一张', cmd: 'bgSkin.random' },
+    { label: '$(sync) 随机切换已选图片', cmd: 'bgSkin.random' },
     { label: '$(dash) 调整透明度', cmd: 'bgSkin.opacity' },
     { label: '$(eye-dimmed) 调整模糊', cmd: 'bgSkin.blur' },
     { label: '$(screen-full) 调整位置/尺寸', cmd: 'bgSkin.position' },
@@ -469,6 +561,8 @@ async function activate(context) {
   const registrations = [
     ['bgSkin.menu', cmdMenu],
     ['bgSkin.applyPreset', cmdApplyPreset],
+    ['bgSkin.randomPreset', cmdRandomPreset],
+    ['bgSkin.toggleThemePreset', cmdToggleThemePreset],
     ['bgSkin.selectFolder', cmdSelectFolder],
     ['bgSkin.selectImages', cmdSelectImages],
     ['bgSkin.random', cmdRandom],
@@ -490,6 +584,15 @@ async function activate(context) {
   bar.show();
   context.subscriptions.push(bar);
 
+  // 切换亮/暗主题时，若开启主题联动则静默换预设（图已一致则不动）
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      syncPresetByTheme(true).catch((err) => {
+        log(`主题联动失败: ${err && err.stack}`);
+      });
+    })
+  );
+
   // 启动同步：
   //  - VS Code 升级覆盖了补丁（标记丢失）→ 自动重新注入
   //  - 设置被手动改过（指纹不一致）→ 重新注入
@@ -504,9 +607,14 @@ async function activate(context) {
     }
     const state = patcher.readState(vscode.env.appRoot);
     const cfg = getConfig();
+    // 主题联动：启动时若已开启，先按当前亮/暗主题对齐预设（仅在不一致时改）
+    if (cfg.enabled && cfg.autoPresetByTheme) {
+      await syncPresetByTheme(true);
+    }
     // 图库启动轮换：每次都从文件夹随机抽一张
-    if (cfg.enabled && cfg.imageFolder && cfg.rotateOnStartup) {
-      const pool = listImagesInFolder(cfg.imageFolder);
+    const cfg0 = getConfig();
+    if (cfg0.enabled && cfg0.imageFolder && cfg0.rotateOnStartup) {
+      const pool = listImagesInFolder(cfg0.imageFolder);
       if (pool.length > 0) {
         const pick = pool[Math.floor(Math.random() * pool.length)];
         await updateSetting('images', [pick, ...pool.filter((p) => p !== pick)]);

@@ -2,7 +2,7 @@
   "name": "bg-skin",
   "displayName": "bg-skin — 自定义编辑器背景",
   "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "bg-skin-dev",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,16 @@
       {
         "command": "bgSkin.applyPreset",
         "title": "预设皮肤（二次元）",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.randomPreset",
+        "title": "随机换一套预设",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.toggleThemePreset",
+        "title": "按亮/暗主题自动换肤",
         "category": "bg-skin"
       },
       {
@@ -123,6 +133,23 @@
           "minimum": 0.01,
           "maximum": 0.5,
           "description": "overlay 覆盖层模式专用透明度。建议 0.05~0.15，避免遮住代码。"
+        },
+        "bgSkin.autoPresetByTheme": {
+          "type": "boolean",
+          "default": false,
+          "description": "按 VS Code 亮/暗主题自动切换内置预设皮肤（切主题后需重载窗口生效）。"
+        },
+        "bgSkin.lightPreset": {
+          "type": "string",
+          "default": "sakura",
+          "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+          "description": "亮色主题时使用的内置预设 id。"
+        },
+        "bgSkin.darkPreset": {
+          "type": "string",
+          "default": "starry",
+          "enum": ["forest", "city", "room", "sakura", "starry", "nebula"],
+          "description": "暗色主题时使用的内置预设 id。"
         },
         "bgSkin.blur": {
           "type": "number",

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 (2026-09-15)
+
+主题联动与随机预设：
+
+- 新增 `bgSkin.autoPresetByTheme`：切换 VS Code 亮/暗主题时自动换预设皮肤
+- 新增 `bgSkin.lightPreset` / `bgSkin.darkPreset`（默认 sakura / starry）
+- 新增命令 `bgSkin.randomPreset`「随机换一套预设」
+- 新增命令 `bgSkin.toggleThemePreset`「按亮/暗主题自动换肤」
+- 监听 `onDidChangeActiveColorTheme`，启动时也会按当前主题对齐
+
 ## 0.3.0 (2026-09-15)
 
 二次元预设皮肤：

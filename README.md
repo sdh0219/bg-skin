@@ -25,6 +25,8 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
 | 命令 | 说明 |
 | --- | --- |
 | `bg-skin: 预设皮肤（二次元）` | 内置 6 套动漫壁纸 + 推荐参数，一键套用 |
+| `bg-skin: 随机换一套预设` | 从内置预设里随机换 |
+| `bg-skin: 按亮/暗主题自动换肤` | 亮色→樱花/森林，暗色→星空/赛博（可在设置里改） |
 | `bg-skin: 背景设置菜单` | 快捷菜单（状态栏右下角 Background 按钮同款） |
 | `bg-skin: 选择图库文件夹（随机轮换）` | 指定文件夹，后续随机从这里换图 |
 | `bg-skin: 选择背景图（可多选）` | 文件选择器选图，当前显示第一张 |
@@ -46,6 +48,9 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
   "bgSkin.rotateOnStartup": false,          // 可选：启动时自动换一张
   "bgSkin.opacity": 0.18,                   // behind 模式
   "bgSkin.overlayOpacity": 0.08,            // overlay 模式专用，建议更低
+  "bgSkin.autoPresetByTheme": false,        // 可选：亮/暗主题自动换预设
+  "bgSkin.lightPreset": "sakura",
+  "bgSkin.darkPreset": "starry",
   "bgSkin.blur": 0,
   "bgSkin.position": "cover",
   "bgSkin.mode": "behind"
