@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 (2026-09-15)
+
+图库与 overlay 体验：
+
+- 新增 `bgSkin.imageFolder`：指定图库文件夹后，「随机切换」自动扫描文件夹
+- 新增 `bgSkin.rotateOnStartup`：每次启动从图库随机换一张（换图后需重载窗口）
+- 新增命令 `bgSkin.selectFolder`「选择图库文件夹」
+- 新增 `bgSkin.overlayOpacity`：overlay 覆盖层独立透明度（默认 0.08），不再与 behind 共用 opacity
+- 启动指纹按模式取对应透明度，避免 behind/overlay 切换后误判无需重载
+
 ## 0.2.1 (2026-09-15)
 
 稳定性加固 + 可用性：

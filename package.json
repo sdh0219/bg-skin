@@ -2,7 +2,7 @@
   "name": "bg-skin",
   "displayName": "bg-skin — 自定义编辑器背景",
   "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "bg-skin-dev",
   "license": "MIT",
   "repository": {
@@ -31,6 +31,11 @@
       {
         "command": "bgSkin.menu",
         "title": "背景设置菜单",
+        "category": "bg-skin"
+      },
+      {
+        "command": "bgSkin.selectFolder",
+        "title": "选择图库文件夹（随机轮换）",
         "category": "bg-skin"
       },
       {
@@ -90,12 +95,29 @@
           "default": [],
           "description": "背景图片的绝对路径列表。当前显示第一张，可用「随机切换」轮换。"
         },
+        "bgSkin.imageFolder": {
+          "type": "string",
+          "default": "",
+          "description": "图库文件夹绝对路径。设置后「随机切换」会从该文件夹扫描图片。"
+        },
+        "bgSkin.rotateOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "启动时从图库文件夹随机换一张（需先设置 imageFolder）。换图后需重载窗口生效。"
+        },
         "bgSkin.opacity": {
           "type": "number",
           "default": 0.18,
           "minimum": 0.02,
           "maximum": 1,
-          "description": "背景不透明度 0~1，越大越明显。建议 0.1~0.25 保证代码可读。"
+          "description": "behind 模式背景不透明度 0~1，越大越明显。建议 0.1~0.25 保证代码可读。"
+        },
+        "bgSkin.overlayOpacity": {
+          "type": "number",
+          "default": 0.08,
+          "minimum": 0.01,
+          "maximum": 0.5,
+          "description": "overlay 覆盖层模式专用透明度。建议 0.05~0.15，避免遮住代码。"
         },
         "bgSkin.blur": {
           "type": "number",

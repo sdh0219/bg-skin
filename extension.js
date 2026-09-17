@@ -1,12 +1,15 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const vscode = require('vscode');
 const patcher = require('./src/patcher');
 const persist = require('./src/persist');
 
 let outputChannel = null;
 let extensionId = null;
+
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp|avif)$/i;
 
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -43,12 +46,35 @@ function ensureImageUsable(cfg) {
   return true;
 }
 
+/** 列出文件夹内可用背景图（绝对路径，排序稳定）。 */
+function listImagesInFolder(folder) {
+  if (!folder || !fs.existsSync(folder)) return [];
+  try {
+    return fs
+      .readdirSync(folder)
+      .filter((n) => IMAGE_EXT.test(n))
+      .map((n) => path.join(folder, n))
+      .sort();
+  } catch (err) {
+    log(`读取图库失败: ${describeFsError(err)}`);
+    return [];
+  }
+}
+
+/** overlay 模式用独立透明度；behind 用 opacity。 */
+function effectiveOpacity(cfg) {
+  return cfg.mode === 'overlay' ? cfg.overlayOpacity : cfg.opacity;
+}
+
 function getConfig() {
   const c = vscode.workspace.getConfiguration('bgSkin');
   return {
     enabled: c.get('enabled', true),
     images: (c.get('images', []) || []).map(String),
+    imageFolder: String(c.get('imageFolder', '') || ''),
+    rotateOnStartup: !!c.get('rotateOnStartup', false),
     opacity: c.get('opacity', 0.18),
+    overlayOpacity: c.get('overlayOpacity', 0.08),
     blur: c.get('blur', 0),
     position: c.get('position', 'cover'),
     mode: c.get('mode', 'behind'),
@@ -65,12 +91,13 @@ function updateSetting(key, value) {
 function syncPatch() {
   const cfg = getConfig();
   const appRoot = vscode.env.appRoot;
+  const opacity = effectiveOpacity(cfg);
   if (cfg.enabled && cfg.images.length > 0) {
     return patcher.applyPatch(
       appRoot,
       {
         imagePath: cfg.images[0],
-        opacity: cfg.opacity,
+        opacity,
         position: cfg.position,
         blur: cfg.blur,
         mode: cfg.mode,
@@ -137,6 +164,55 @@ function applyFlow(what) {
 
 // ---------------------------------------------------------------- 命令实现
 
+async function cmdSelectFolder() {
+  const uris = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    canSelectFolders: true,
+    canSelectFiles: false,
+    openLabel: '设为图库',
+    title: 'bg-skin：选择背景图文件夹',
+  });
+  if (!uris || !uris.length) return;
+  const folder = uris[0].fsPath;
+  const list = listImagesInFolder(folder);
+  if (!list.length) {
+    vscode.window.showWarningMessage(`bg-skin：文件夹里没有可用图片：${folder}`);
+    return;
+  }
+  await updateSetting('imageFolder', folder);
+  await updateSetting('images', list);
+  log(`图库已设置: ${folder}（${list.length} 张）`);
+  applyFlow(`图库已加载（${list.length} 张）`);
+}
+
+/** 从图库文件夹重新扫描并随机换一张；未设文件夹则在 images 里轮换。 */
+async function cmdRotateFromFolder() {
+  const cfg = getConfig();
+  let pool = cfg.images;
+  if (cfg.imageFolder) {
+    pool = listImagesInFolder(cfg.imageFolder);
+    if (!pool.length) {
+      vscode.window.showWarningMessage(`bg-skin：图库文件夹没有可用图片：${cfg.imageFolder}`);
+      return;
+    }
+    await updateSetting('images', pool);
+    log(`图库已刷新: ${pool.length} 张`);
+  }
+  if (pool.length < 2 && !cfg.imageFolder) {
+    vscode.window.showInformationMessage(
+      'bg-skin：先「选择图库文件夹」或「选择背景图（可多选）」。'
+    );
+    return;
+  }
+  const idx = Math.floor(Math.random() * pool.length);
+  const picked = pool[idx];
+  // 把选中的挪到首位，其余保持相对顺序
+  const next = [picked, ...pool.filter((p) => p !== picked)];
+  await updateSetting('images', next);
+  log(`随机切换: ${picked}`);
+  applyFlow('已随机切换背景图');
+}
+
 async function cmdSelectImages() {
   const uris = await vscode.window.showOpenDialog({
     canSelectMany: true,
@@ -153,15 +229,7 @@ async function cmdSelectImages() {
 }
 
 async function cmdRandom() {
-  const cfg = getConfig();
-  if (cfg.images.length < 2) {
-    vscode.window.showInformationMessage('bg-skin：背景图少于两张，先用「选择背景图」多选几张吧。');
-    return;
-  }
-  const idx = Math.floor(Math.random() * cfg.images.length);
-  const picked = cfg.images.splice(idx, 1)[0];
-  await updateSetting('images', [picked, ...cfg.images]);
-  applyFlow('已随机切换背景图');
+  await cmdRotateFromFolder();
 }
 
 function askNumber(title, current, min, max, presets, apply) {
@@ -272,6 +340,7 @@ async function cmdRestore() {
 
 function cmdMenu() {
   const items = [
+    { label: '$(folder-opened) 选择图库文件夹（随机轮换）', cmd: 'bgSkin.selectFolder' },
     { label: '$(device-camera) 选择背景图（可多选）', cmd: 'bgSkin.selectImages' },
     { label: '$(dice) 随机切换一张', cmd: 'bgSkin.random' },
     { label: '$(dash) 调整透明度', cmd: 'bgSkin.opacity' },
@@ -298,6 +367,7 @@ async function activate(context) {
 
   const registrations = [
     ['bgSkin.menu', cmdMenu],
+    ['bgSkin.selectFolder', cmdSelectFolder],
     ['bgSkin.selectImages', cmdSelectImages],
     ['bgSkin.random', cmdRandom],
     ['bgSkin.opacity', cmdOpacity],
@@ -332,13 +402,25 @@ async function activate(context) {
     }
     const state = patcher.readState(vscode.env.appRoot);
     const cfg = getConfig();
-    const want = cfg.enabled && cfg.images.length > 0;
+    // 图库启动轮换：每次都从文件夹随机抽一张
+    if (cfg.enabled && cfg.imageFolder && cfg.rotateOnStartup) {
+      const pool = listImagesInFolder(cfg.imageFolder);
+      if (pool.length > 0) {
+        const pick = pool[Math.floor(Math.random() * pool.length)];
+        await updateSetting('images', [pick, ...pool.filter((p) => p !== pick)]);
+        log(`启动轮换: ${pick}`);
+      } else {
+        log(`图库文件夹无图片: ${cfg.imageFolder}`);
+      }
+    }
+    const cfg2 = getConfig();
+    const want = cfg2.enabled && cfg2.images.length > 0;
     const fp = patcher.fingerprintOf({
-      imagePath: cfg.images[0],
-      opacity: cfg.opacity,
-      position: cfg.position,
-      blur: cfg.blur,
-      mode: cfg.mode,
+      imagePath: cfg2.images[0],
+      opacity: effectiveOpacity(cfg2),
+      position: cfg2.position,
+      blur: cfg2.blur,
+      mode: cfg2.mode,
     });
     log(
       `state: patched=${state.patched} fingerprint=${state.fingerprint} | want=${want} fingerprint=${fp}`

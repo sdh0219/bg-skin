@@ -26,7 +26,8 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
 | --- | --- |
 | `bg-skin: 背景设置菜单` | 快捷菜单（状态栏右下角 Background 按钮同款） |
 | `bg-skin: 选择背景图（可多选）` | 文件选择器选图，当前显示第一张 |
-| `bg-skin: 随机切换背景图` | 从已选图片中随机轮换 |
+| `bg-skin: 选择图库文件夹（随机轮换）` | 指定文件夹，后续随机从这里换图 |
+| `bg-skin: 随机切换背景图` | 从图库/已选图片中随机轮换 |
 | `bg-skin: 调整背景透明度` | 0.02~1，越大越明显，建议 0.1~0.25 |
 | `bg-skin: 调整背景模糊` | 毛玻璃效果（px） |
 | `bg-skin: 调整背景位置/尺寸` | cover / contain / center |
@@ -40,7 +41,10 @@ VS Code 没有官方的背景 API，本扩展采用社区通行方案：向安�
 {
   "bgSkin.enabled": true,
   "bgSkin.images": ["D:/图库/壁纸.png"],   // 多选后自动写入
-  "bgSkin.opacity": 0.18,
+  "bgSkin.imageFolder": "D:/图库",          // 可选：图库文件夹，随机轮换从这里扫
+  "bgSkin.rotateOnStartup": false,          // 可选：启动时自动换一张
+  "bgSkin.opacity": 0.18,                   // behind 模式
+  "bgSkin.overlayOpacity": 0.08,            // overlay 模式专用，建议更低
   "bgSkin.blur": 0,
   "bgSkin.position": "cover",
   "bgSkin.mode": "behind"
@@ -101,7 +105,8 @@ node scripts/apply-dev.js status|apply|restore   # CLI 直接操作（开发与�
 ## Roadmap
 
 - [x] MVP：选图（多选）/ 透明度 / 模糊 / 位置 / 状态栏 / 升级自愈 / 卸载还原
-- [ ] 图库文件夹定时轮换
+- [x] 图库文件夹轮换
+- [x] overlay 独立透明度
 - [ ] 预设"皮肤"（图 + 透明度 + 主题一键应用）
 - [ ] 状态栏右键菜单
 - [ ] 中英双语 README + 市场截图
