@@ -23,10 +23,10 @@ const CSS_START = '/* bg-skin-patch-start */';
 const CSS_END = '/* bg-skin-patch-end */';
 const HTML_START = '<!-- bg-skin-patch-start (bg-skin) -->';
 const HTML_END = '<!-- bg-skin-patch-end (bg-skin) -->';
+const CSP_START = '<!-- bg-skin-csp-start -->';
 const BACKUP_SUFFIX = '.bg-skin-backup';
 const META_SUFFIX = '.bg-skin.meta.json';
 const TMP_SUFFIX = '.bg-skin.tmp';
-const CSP_SIGNATURE = 'img-src file:';
 
 // 让主要工作区容器透出背景。标签页、标题栏、弹窗保持原配色，保证可读性。
 const TRANSPARENT_SELECTORS = [
@@ -233,18 +233,36 @@ function buildHtmlBlock(cfg) {
 
 // ---------------------------------------------------------------- CSP
 
-/** 给 CSP img-src 增加 file:。返回 { content, changed, ok, reason? } */
+/**
+ * 给 CSP img-src 增加 file:，并插入 CSP_START 标记（只动我们自己加过的）。
+ * 返回 { content, changed, ok, reason? }。
+ */
 function patchCspContent(html) {
   const m = html.match(/img-src([^;]*);/);
   if (!m) return { content: html, changed: false, ok: false, reason: 'CSP img-src 指令未找到' };
-  if (/file:/.test(m[1])) return { content: html, changed: false, ok: true };
-  const next = html.replace(m[0], () => `img-src file:${m[1]};`);
+  if (/file:/.test(m[1])) {
+    // 已有 file:：无论是我们加的还是上游自带，都不重复改
+    return { content: html, changed: false, ok: true };
+  }
+  let next = html.replace(m[0], () => `img-src file:${m[1]};`);
+  if (!next.includes(CSP_START)) {
+    // 保留 meta 标签原有缩进，剥离时才能字节级还原
+    const marked = next.replace(
+      /([ \t]*)(<meta\b[^>]*Content-Security-Policy[^>]*>)/i,
+      (_, indent, tag) => `${indent}${CSP_START}\n${indent}${tag}`
+    );
+    next = marked.includes(CSP_START) ? marked : `${CSP_START}\n${next}`;
+  }
   return { content: next, changed: true, ok: true };
 }
 
-/** 只移除我们插入的 "img-src file:" 签名，不碰上游本来就有的 file:。 */
+/** 只在存在 CSP_START 标记时移除我们插入的 file:；绝不碰上游自带的 file:。 */
 function unpatchCspContent(html) {
-  return html.replace(/img-src file:(\s)/, 'img-src$1');
+  if (!html.includes(CSP_START)) return html;
+  return html
+    .replace(/img-src file:(\s)/, 'img-src$1')
+    // 只吃掉「标记前缩进 + 标记 + 换行」，保留下一行（meta）自己的缩进
+    .replace(new RegExp(`[ \\t]*${escapeRe(CSP_START)}\\r?\\n`, 'g'), '');
 }
 
 // ---------------------------------------------------------------- 标记拼接 / 剥离
@@ -253,7 +271,7 @@ function isPatched(content) {
   return (
     content.includes(CSS_START) ||
     content.includes(HTML_START) ||
-    content.includes(CSP_SIGNATURE)
+    content.includes(CSP_START)
   );
 }
 
@@ -287,7 +305,22 @@ function stripBlocks(content) {
 
 // ---------------------------------------------------------------- 备份
 
-function writeMeta(metaFile, buf, version, verb, algoName) {
+/** 相对 out/ 的 POSIX 校验和键；不在 out/ 下返回 null。 */
+function checksumKeyFor(file, appRoot) {
+  const outDir = path.join(appRoot, 'out');
+  const rel = path.relative(outDir, file).split(path.sep).join('/');
+  return rel.startsWith('..') ? null : rel;
+}
+
+function readProductJson(appRoot) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(appRoot, 'product.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeMeta(metaFile, buf, version, verb, algoName, originalChecksum) {
   fs.writeFileSync(
     metaFile,
     JSON.stringify(
@@ -295,6 +328,8 @@ function writeMeta(metaFile, buf, version, verb, algoName) {
         vscodeVersion: version,
         sha256: sha256hex(buf),
         checksumAlgo: algoName ?? null,
+        // 备份时机 product.json 里该文件的原厂值；还原时优先写回，避免依赖已污染的存量哈希反推
+        originalChecksum: originalChecksum ?? null,
         [`${verb}At`]: new Date().toISOString(),
       },
       null,
@@ -304,7 +339,7 @@ function writeMeta(metaFile, buf, version, verb, algoName) {
 }
 
 /**
- * 确保备份与当前（未打补丁的）文件一致；内容不一致时刷新备份。返回备份路径。
+ * 确保备份与当前（未打补丁的）文件一致；内容不一致时刷新备份。返回 { backup, refreshed }。
  * 备份时机文件必然是原版——此时探测校验和算法最可靠，结果记入元数据，
  * 供日后"存量校验和已是我们的重写值、内容反推失效"的还原流程使用。
  */
@@ -312,19 +347,52 @@ function ensureBackup(file, version, log, appRoot) {
   const backup = file + BACKUP_SUFFIX;
   const metaFile = file + META_SUFFIX;
   const cur = fs.readFileSync(file);
+  const algoName = detectChecksumAlgo(appRoot)?.name ?? null;
+  const rel = checksumKeyFor(file, appRoot);
+  const originalChecksum = rel != null ? (readProductJson(appRoot)?.checksums?.[rel] ?? null) : null;
+
   if (fs.existsSync(backup)) {
     const prev = fs.readFileSync(backup);
     if (!prev.equals(cur)) {
       fs.writeFileSync(backup, cur);
-      writeMeta(metaFile, cur, version, 'refreshed', detectChecksumAlgo(appRoot)?.name ?? null);
+      writeMeta(metaFile, cur, version, 'refreshed', algoName, originalChecksum);
       log(`备份已刷新（原文件内容变化，通常是 VS Code 升级）: ${backup}`);
+      return { backup, refreshed: true };
     }
-  } else {
-    fs.writeFileSync(backup, cur);
-    writeMeta(metaFile, cur, version, 'created', detectChecksumAlgo(appRoot)?.name ?? null);
-    log(`备份已创建: ${backup}`);
+    // 备份一致但 meta 缺 originalChecksum（老版本升级上来）：补写
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      if (meta.originalChecksum == null && originalChecksum != null) {
+        meta.originalChecksum = originalChecksum;
+        fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2));
+      }
+    } catch (_) {
+      writeMeta(metaFile, cur, version, 'refreshed', algoName, originalChecksum);
+    }
+    return { backup, refreshed: false };
   }
-  return backup;
+  fs.writeFileSync(backup, cur);
+  writeMeta(metaFile, cur, version, 'created', algoName, originalChecksum);
+  log(`备份已创建: ${backup}`);
+  return { backup, refreshed: true };
+}
+
+/** 首次改写或升级后刷新 product.json 备份。当前 product.json 必须仍是上游原厂状态。 */
+function ensureProductBackup(appRoot, log, forceRefresh) {
+  const productPath = path.join(appRoot, 'product.json');
+  if (!fs.existsSync(productPath)) return false;
+  const backup = productPath + BACKUP_SUFFIX;
+  if (!fs.existsSync(backup)) {
+    fs.writeFileSync(backup, fs.readFileSync(productPath));
+    log(`product.json 备份已创建: ${backup}`);
+    return true;
+  }
+  if (forceRefresh) {
+    fs.writeFileSync(backup, fs.readFileSync(productPath));
+    log(`product.json 备份已刷新（上游文件变化）: ${backup}`);
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- 校验和
@@ -445,22 +513,85 @@ function updateChecksums(appRoot, files, log) {
   return changed;
 }
 
+/**
+ * 还原时优先从 meta.originalChecksum 写回原厂校验和。
+ * 返回 { ok, restored, missing, changed }；ok 表示所有受校验文件都成功写回。
+ */
+function restoreChecksumsFromMeta(appRoot, files, log) {
+  const productPath = path.join(appRoot, 'product.json');
+  if (!fs.existsSync(productPath)) return { ok: false, restored: 0, missing: files.length, changed: false };
+  let product;
+  try {
+    product = JSON.parse(fs.readFileSync(productPath, 'utf8'));
+  } catch (_) {
+    return { ok: false, restored: 0, missing: files.length, changed: false };
+  }
+  if (!product.checksums) return { ok: false, restored: 0, missing: files.length, changed: false };
+
+  const outDir = path.join(appRoot, 'out');
+  let changed = false;
+  let restored = 0;
+  let missing = 0;
+  for (const file of files) {
+    const rel = path.relative(outDir, file).split(path.sep).join('/');
+    if (rel.startsWith('..') || !(rel in product.checksums)) continue;
+    let meta = null;
+    try {
+      meta = JSON.parse(fs.readFileSync(file + META_SUFFIX, 'utf8'));
+    } catch (_) {
+      meta = null;
+    }
+    if (!meta || meta.originalChecksum == null) {
+      missing++;
+      continue;
+    }
+    if (product.checksums[rel] !== meta.originalChecksum) {
+      product.checksums[rel] = meta.originalChecksum;
+      changed = true;
+    }
+    restored++;
+  }
+  if (changed) {
+    atomicWrite(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+    log('校验和已从 meta 原厂值写回 product.json');
+  }
+  return { ok: missing === 0 && restored > 0, restored, missing, changed };
+}
+
+/** product.json 整文件从备份还原（剥离还原且 meta 缺失时的兜底）。 */
+function restoreProductJsonFromBackup(appRoot, log) {
+  const productPath = path.join(appRoot, 'product.json');
+  const backup = productPath + BACKUP_SUFFIX;
+  if (!fs.existsSync(backup)) return false;
+  try {
+    atomicWrite(productPath, fs.readFileSync(backup));
+    log(`已从备份还原 product.json: ${backup}`);
+    return true;
+  } catch (err) {
+    log(`product.json 备份还原失败: ${err.message}`);
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- 主流程
 
 function patchFile(file, block, version, log, appRoot) {
   const original = fs.readFileSync(file, 'utf8');
-  if (!isPatched(original)) ensureBackup(file, version, log, appRoot);
+  let refreshed = false;
+  if (!isPatched(original)) {
+    refreshed = ensureBackup(file, version, log, appRoot).refreshed;
+  }
   const isHtml = file.toLowerCase().endsWith('.html');
   const updated = isHtml ? spliceHtmlBlock(original, block) : spliceCssBlock(original, block);
   if (updated !== original) {
     atomicWrite(file, updated);
     log(`已写入补丁: ${file}`);
   }
-  return { changed: updated !== original };
+  return { changed: updated !== original, refreshed };
 }
 
 /**
- * 按配置打补丁。cfg = { imagePath, opacity, position, blur }。
+ * 按配置打补丁。cfg = { imagePath, opacity, position, blur, mode }。
  * 返回 { ok, reason?, changed[], backups[], warnings[] }。
  */
 function applyPatch(appRoot, cfg, log) {
@@ -478,17 +609,22 @@ function applyPatch(appRoot, cfg, log) {
   const version = readVscodeVersion(appRoot);
   const changed = [];
   const touched = [];
+  let anyRefreshed = false;
 
   // 1) 样式块：新版注入 css，老版本回退 html
   const styleFile = targets.styleFile;
   const block = styleFile === targets.css ? buildCssBlock(cfg) : buildHtmlBlock(cfg);
-  if (patchFile(styleFile, block, version, log, appRoot).changed) changed.push(styleFile);
+  const styleResult = patchFile(styleFile, block, version, log, appRoot);
+  if (styleResult.changed) changed.push(styleFile);
+  if (styleResult.refreshed) anyRefreshed = true;
   touched.push(styleFile);
 
-  // 2) CSP：给 workbench.html 的 img-src 放行 file:
+  // 2) CSP：给 workbench.html 的 img-src 放行 file:（带独立标记）
   if (targets.html) {
     const html = fs.readFileSync(targets.html, 'utf8');
-    if (!isPatched(html)) ensureBackup(targets.html, version, log, appRoot);
+    if (!isPatched(html)) {
+      if (ensureBackup(targets.html, version, log, appRoot).refreshed) anyRefreshed = true;
+    }
     const res = patchCspContent(html);
     if (res.changed) {
       atomicWrite(targets.html, res.content);
@@ -500,6 +636,9 @@ function applyPatch(appRoot, cfg, log) {
   } else {
     warnings.push('未找到 workbench.html，未能放宽 CSP；若背景图不显示多半是这个原因');
   }
+
+  // 2.5) product.json 备份：此时仍是上游原厂校验和，是备份的唯一正确时机
+  ensureProductBackup(appRoot, log, anyRefreshed);
 
   // 3) 校验和（识别不了算法则跳过并警告，绝不写错格式）
   const csStatus = updateChecksums(appRoot, touched, log);
@@ -558,7 +697,23 @@ function restore(appRoot, log, options) {
     }
   }
 
-  if (touched.length) updateChecksums(appRoot, touched, log);
+  if (touched.length) {
+    // 优先：meta 里的原厂 checksum（不依赖已污染的存量值反推算法）
+    const fromMeta = restoreChecksumsFromMeta(appRoot, touched, log);
+    if (!fromMeta.ok) {
+      // 次选：整份 product.json 备份（剥离还原且 meta 缺失时）
+      if (!restoreProductJsonFromBackup(appRoot, log)) {
+        // 末选：算法探测 + 按当前（已还原）文件重算
+        updateChecksums(appRoot, touched, log);
+      }
+    }
+  }
+
+  if (cleanBackups) {
+    const productBackup = path.join(appRoot, 'product.json') + BACKUP_SUFFIX;
+    try { fs.unlinkSync(productBackup); } catch (_) { /* 忽略 */ }
+  }
+
   return { ok: true, restoredFrom, strippedIn };
 }
 
@@ -591,6 +746,7 @@ module.exports = {
   CSS_END,
   HTML_START,
   HTML_END,
+  CSP_START,
   BACKUP_SUFFIX,
   META_SUFFIX,
   // 主流程
@@ -612,4 +768,6 @@ module.exports = {
   isPatched,
   updateChecksums,
   atomicWrite,
+  ensureProductBackup,
+  restoreChecksumsFromMeta,
 };

@@ -2,3 +2,7 @@ test/.sandbox/
 assets/
 *.vsix
 node_modules/
+# 推广物料：成片与媒体体积大，不入库
+promo/out/
+promo/assets/
+promo/.tmp*/

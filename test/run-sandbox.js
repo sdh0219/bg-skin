@@ -161,6 +161,7 @@ function run() {
 
     const html = read(HTML_PATH).toString();
     assert.ok(html.includes('img-src file:'), 'CSP 应放行 file:');
+    assert.ok(html.includes(patcher.CSP_START), 'CSP 应带独立标记');
     assert.ok(html.includes("'self'"), 'CSP 原有指令应保留');
     assert.strictEqual(html.split('img-src file:').length - 1, 1, 'file: 只插入一次');
 
@@ -170,6 +171,23 @@ function run() {
     const htmlBackup = read(HTML_PATH + patcher.BACKUP_SUFFIX);
     assert.strictEqual(sha256hex(htmlBackup), pristine.html, 'html 备份应是原版');
 
+    // product.json 已备份（原厂状态）
+    const productBackupPath = productPath + patcher.BACKUP_SUFFIX;
+    assert.ok(fs.existsSync(productBackupPath), '首次改写前应备份 product.json');
+    assert.deepStrictEqual(
+      JSON.parse(read(productBackupPath)).checksums,
+      pristine.checksums,
+      'product.json 备份应是原厂校验和'
+    );
+
+    // meta 记录了原厂 checksum
+    const cssMeta = JSON.parse(read(CSS_PATH + patcher.META_SUFFIX));
+    assert.strictEqual(
+      cssMeta.originalChecksum,
+      pristine.checksums['vs/workbench/workbench.desktop.main.css'],
+      'meta 应记录原厂 checksum'
+    );
+
     // 校验和已重写且算法正确
     const sums = JSON.parse(read(productPath)).checksums;
     assert.strictEqual(sums['vs/workbench/workbench.desktop.main.css'], checksumOf(read(CSS_PATH)));
@@ -178,7 +196,7 @@ function run() {
       checksumOf(read(HTML_PATH))
     );
     assert.ok(!sums['vs/workbench/workbench.desktop.main.css'].includes('='), '校验和不应含 = 尾');
-    console.log('ok  3 - 首次打补丁（注入+CSP+备份+校验和）');
+    console.log('ok  3 - 首次打补丁（注入+CSP+备份+product备份+meta原厂值+校验和）');
   }
 
   // ---------- 4. 幂等：同配置重复打补丁 ----------
@@ -215,6 +233,7 @@ function run() {
     const sums = JSON.parse(read(productPath)).checksums;
     assert.deepStrictEqual(sums, pristine.checksums, '校验和应回到原厂值');
     assert.strictEqual(patcher.readState(APP_ROOT).patched, false, '还原后应为未打补丁状态');
+    assert.ok(!read(HTML_PATH).toString().includes(patcher.CSP_START), '还原后不应残留 CSP 标记');
     console.log('ok  6 - 还原（有备份，字节级一致 + 校验和回原厂）');
   }
 
@@ -231,15 +250,21 @@ function run() {
     patcher.applyPatch(APP_ROOT, CFG1, log);
     fs.rmSync(CSS_PATH + patcher.BACKUP_SUFFIX);
     fs.rmSync(HTML_PATH + patcher.BACKUP_SUFFIX);
+    fs.rmSync(CSS_PATH + patcher.META_SUFFIX);
+    fs.rmSync(HTML_PATH + patcher.META_SUFFIX);
     const r = patcher.restore(APP_ROOT, log);
     assert.strictEqual(r.strippedIn.length, 2, '应走剥离路径');
     const css = read(CSS_PATH).toString();
     const html = read(HTML_PATH).toString();
     assert.ok(!css.includes('bg-skin') && !html.includes('bg-skin'), '剥离后不应残留任何 bg-skin 痕迹');
     assert.ok(!html.includes('img-src file:'), '剥离应移除 CSP 签名');
+    assert.ok(!html.includes(patcher.CSP_START), '剥离应移除 CSP 标记');
     assert.strictEqual(sha256hex(read(CSS_PATH)), pristine.css, '剥离还原后 css 应与原版一致');
     assert.strictEqual(sha256hex(read(HTML_PATH)), pristine.html, '剥离还原后 html 应与原版一致');
-    console.log('ok  8 - 备份丢失时按标记剥离还原');
+    // 关键回归：无 meta 时也必须把校验和回原厂（走 product.json 备份）
+    const sums = JSON.parse(read(productPath)).checksums;
+    assert.deepStrictEqual(sums, pristine.checksums, '剥离还原后校验和必须回原厂（防"安装已损坏"）');
+    console.log('ok  8 - 备份丢失时按标记剥离还原 + 校验和回原厂');
   }
 
   // ---------- 9. VS Code 升级模拟：原文件被上游覆盖 → 备份自动刷新 ----------
@@ -381,6 +406,74 @@ function run() {
     fs.rmSync(process.env.BG_SKIN_MARKER, { force: true });
     delete process.env.BG_SKIN_MARKER;
     console.log('ok 15 - 安装位置持久化');
+  }
+
+  // ---------- 16. 上游自带 img-src file: → 不插入、还原不误删 ----------
+  {
+    makeSandbox();
+    const upstreamWithFile = ORIGINAL_HTML.replace(
+      /img-src\s*\n\s*'self'/,
+      "img-src\n\t\t\t\t\t'self'\n\t\t\t\t\tfile:"
+    );
+    fs.writeFileSync(HTML_PATH, upstreamWithFile);
+    // 同步校验和（模拟上游原厂）
+    const product = JSON.parse(read(productPath));
+    product.checksums['vs/code/electron-browser/workbench/workbench.html'] = checksumOf(
+      read(HTML_PATH)
+    );
+    fs.writeFileSync(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+
+    const htmlBefore = read(HTML_PATH).toString();
+    assert.ok(!patcher.isPatched(htmlBefore), '仅上游 file: 不应判为已打补丁');
+
+    patcher.applyPatch(APP_ROOT, CFG1, log);
+    const htmlPatched = read(HTML_PATH).toString();
+    assert.ok(htmlPatched.includes('file:'), '上游 file: 应保留');
+    assert.ok(!htmlPatched.includes(patcher.CSP_START), '上游已有 file: 时不应再插 CSP 标记');
+
+    patcher.restore(APP_ROOT, log);
+    const htmlAfter = read(HTML_PATH).toString();
+    assert.ok(/file:/.test(htmlAfter.match(/img-src([^;]*);/)?.[1] || ''), '还原后上游 file: 必须还在');
+    assert.strictEqual(htmlAfter, upstreamWithFile, 'html 应字节级回到上游原版');
+    console.log('ok 16 - 上游 file: 不误伤');
+  }
+
+  // ---------- 17. 剥离还原且 meta/product 备份全丢 → 不乱写校验和 ----------
+  {
+    makeSandbox();
+    patcher.applyPatch(APP_ROOT, CFG1, log);
+    // 模拟极端救援场景：备份、meta、product 备份全部被删
+    fs.rmSync(CSS_PATH + patcher.BACKUP_SUFFIX);
+    fs.rmSync(HTML_PATH + patcher.BACKUP_SUFFIX);
+    fs.rmSync(CSS_PATH + patcher.META_SUFFIX);
+    fs.rmSync(HTML_PATH + patcher.META_SUFFIX);
+    fs.rmSync(productPath + patcher.BACKUP_SUFFIX);
+    const sumsBefore = JSON.parse(read(productPath)).checksums;
+
+    patcher.restore(APP_ROOT, log);
+    // 文件应剥离干净
+    assert.ok(!read(CSS_PATH).toString().includes('bg-skin'));
+    // 没有可信来源时，绝不能猜格式乱写（宁可保持存量，交给 fix-checksums）
+    const sumsAfter = JSON.parse(read(productPath)).checksums;
+    // 走到 updateChecksums 末选：algoFromMeta 也无 meta → skipped，存量不变
+    assert.deepStrictEqual(sumsAfter, sumsBefore, '无任何来源时不得猜测校验和');
+    console.log('ok 17 - 极端丢失时不猜测校验和');
+  }
+
+  // ---------- 18. meta 原厂 checksum 优先于算法反推 ----------
+  {
+    makeSandbox();
+    patcher.applyPatch(APP_ROOT, CFG1, log);
+    // 故意污染 product.json 校验和到"未知算法"，同时保留 meta 原厂值
+    const product = JSON.parse(read(productPath));
+    for (const k of Object.keys(product.checksums)) product.checksums[k] = 'ZZZZ-not-a-real-checksum';
+    fs.writeFileSync(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+
+    const r = patcher.restore(APP_ROOT, log);
+    assert.strictEqual(r.restoredFrom.length, 2);
+    const sums = JSON.parse(read(productPath)).checksums;
+    assert.deepStrictEqual(sums, pristine.checksums, '应优先用 meta.originalChecksum 写回原厂值');
+    console.log('ok 18 - meta 原厂 checksum 优先写回');
   }
 
   // 清理

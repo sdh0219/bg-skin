@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const vscode = require('vscode');
 const patcher = require('./src/patcher');
 const persist = require('./src/persist');
@@ -9,6 +10,37 @@ let extensionId = null;
 
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+}
+
+/** 把 EPERM/EACCES 等文件系统错误翻译成用户能看懂的提示。 */
+function describeFsError(err) {
+  const code = err && err.code;
+  if (code === 'EPERM' || code === 'EACCES') {
+    return (
+      '没有权限写入 VS Code 安装目录。' +
+      '若是系统级安装（Program Files），请「以管理员身份」运行一次 VS Code 后再试；' +
+      '或改用用户级安装。'
+    );
+  }
+  if (code === 'ENOENT') {
+    return `目标文件不存在：${err && err.message}`;
+  }
+  return (err && err.message) || String(err);
+}
+
+/** 同步前检查第一张背景图是否仍存在；不存在则警告并返回 false。 */
+function ensureImageUsable(cfg) {
+  if (!cfg.images.length) return true;
+  const img = cfg.images[0];
+  if (!fs.existsSync(img)) {
+    log(`背景图不存在: ${img}`);
+    showOutputButton(
+      `背景图不存在或已被移动：${img}。请重新执行「选择背景图」。`,
+      'warning'
+    );
+    return false;
+  }
+  return true;
 }
 
 function getConfig() {
@@ -71,11 +103,15 @@ function showOutputButton(message, level) {
 /** 应用并提示重载。what：动作描述，如 "背景图已更新"。 */
 function applyFlow(what) {
   let result;
+  const cfg = getConfig();
+  if (cfg.enabled && cfg.images.length > 0 && !ensureImageUsable(cfg)) {
+    return;
+  }
   try {
     result = syncPatch();
   } catch (err) {
     log(`apply 失败: ${err && err.stack}`);
-    showOutputButton(`打补丁失败：${err && err.message}`, 'error');
+    showOutputButton(`打补丁失败：${describeFsError(err)}`, 'error');
     return;
   }
   if (!result.ok) {
@@ -319,7 +355,7 @@ async function activate(context) {
     }
   } catch (err) {
     log(`启动同步失败: ${err && err.stack}`);
-    showOutputButton(`启动同步失败：${err && err.message}`, 'error');
+    showOutputButton(`启动同步失败：${describeFsError(err)}`, 'error');
   }
 }
 

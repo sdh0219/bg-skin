@@ -3,6 +3,7 @@
 scripts/**
 test/**
 assets/**
+promo/**
 PROJECT_BRIEF.md
 .gitignore
 *.vsix

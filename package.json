@@ -2,7 +2,7 @@
   "name": "bg-skin",
   "displayName": "bg-skin — 自定义编辑器背景",
   "description": "Pick your own images as the VS Code background (wallpaper under the editor content), with opacity / blur / position control. 选择本地图片作为编辑器背景壁纸，支持透明度、模糊与位置调节，自动处理校验和与卸载还原。",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "bg-skin-dev",
   "license": "MIT",
   "repository": {
