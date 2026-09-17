@@ -8,8 +8,78 @@ const persist = require('./src/persist');
 
 let outputChannel = null;
 let extensionId = null;
+let extensionPath = null;
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp|avif)$/i;
+
+/** 内置二次元预设皮肤（图在扩展 presets/images/ 下）。 */
+const PRESETS = [
+  {
+    id: 'forest',
+    name: '森林 · 水手服',
+    file: 'forest.jpg',
+    opacity: 0.2,
+    blur: 0,
+    position: 'cover',
+    mode: 'behind',
+    desc: '阳光森林，代码区透出氛围感',
+  },
+  {
+    id: 'city',
+    name: '赛博 · 雨夜',
+    file: 'city.jpg',
+    opacity: 0.22,
+    blur: 2,
+    position: 'cover',
+    mode: 'behind',
+    desc: '霓虹雨夜 + 轻微毛玻璃',
+  },
+  {
+    id: 'room',
+    name: '暖光 · 书桌',
+    file: 'room.jpg',
+    opacity: 0.18,
+    blur: 0,
+    position: 'cover',
+    mode: 'behind',
+    desc: '黄昏书桌，安静写代码',
+  },
+  {
+    id: 'sakura',
+    name: '樱花 · 神社',
+    file: 'sakura.jpg',
+    opacity: 0.2,
+    blur: 0,
+    position: 'cover',
+    mode: 'behind',
+    desc: '落樱参道，二次元浓度拉满',
+  },
+  {
+    id: 'starry',
+    name: '星空 · 天台',
+    file: 'starry.jpg',
+    opacity: 0.18,
+    blur: 0,
+    position: 'cover',
+    mode: 'behind',
+    desc: '银河天台，夜猫子友好',
+  },
+  {
+    id: 'nebula',
+    name: '星云 · 极简',
+    file: 'nebula.jpg',
+    opacity: 0.16,
+    blur: 0,
+    position: 'cover',
+    mode: 'behind',
+    desc: '深空星云，不抢代码注意力',
+  },
+];
+
+function presetImagePath(file) {
+  const base = extensionPath || path.join(__dirname);
+  return path.join(base, 'presets', 'images', file);
+}
 
 function log(message) {
   if (outputChannel) outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -163,6 +233,35 @@ function applyFlow(what) {
 }
 
 // ---------------------------------------------------------------- 命令实现
+
+async function cmdApplyPreset() {
+  const items = PRESETS.map((p) => ({
+    label: `$(paintcan) ${p.name}`,
+    description: `${p.opacity} · ${p.blur ? `blur ${p.blur}` : '清晰'}`,
+    detail: p.desc,
+    preset: p,
+  }));
+  const pick = await vscode.window.showQuickPick(items, {
+    title: 'bg-skin：选择预设皮肤（二次元壁纸 + 推荐参数）',
+    placeHolder: '选中后自动改图并写入设置，重载窗口生效',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  if (!pick) return;
+  const p = pick.preset;
+  const img = presetImagePath(p.file);
+  if (!fs.existsSync(img)) {
+    showOutputButton(`预设图片缺失：${img}`, 'error');
+    return;
+  }
+  await updateSetting('images', [img]);
+  await updateSetting('opacity', p.opacity);
+  await updateSetting('blur', p.blur);
+  await updateSetting('position', p.position);
+  await updateSetting('mode', p.mode);
+  log(`应用预设 ${p.id}: ${img}`);
+  applyFlow(`已应用预设「${p.name}」`);
+}
 
 async function cmdSelectFolder() {
   const uris = await vscode.window.showOpenDialog({
@@ -340,6 +439,7 @@ async function cmdRestore() {
 
 function cmdMenu() {
   const items = [
+    { label: '$(sparkle) 预设皮肤（二次元）', cmd: 'bgSkin.applyPreset' },
     { label: '$(folder-opened) 选择图库文件夹（随机轮换）', cmd: 'bgSkin.selectFolder' },
     { label: '$(device-camera) 选择背景图（可多选）', cmd: 'bgSkin.selectImages' },
     { label: '$(dice) 随机切换一张', cmd: 'bgSkin.random' },
@@ -361,12 +461,14 @@ async function activate(context) {
   outputChannel = vscode.window.createOutputChannel('bg-skin');
   context.subscriptions.push(outputChannel);
   extensionId = context.extension.id;
+  extensionPath = context.extensionPath;
 
   log('=== bg-skin activate ===');
   log(`VS Code ${vscode.version} | appRoot: ${vscode.env.appRoot}`);
 
   const registrations = [
     ['bgSkin.menu', cmdMenu],
+    ['bgSkin.applyPreset', cmdApplyPreset],
     ['bgSkin.selectFolder', cmdSelectFolder],
     ['bgSkin.selectImages', cmdSelectImages],
     ['bgSkin.random', cmdRandom],
